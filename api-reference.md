@@ -3,7 +3,7 @@
 Base URL: `https://your-persistio-instance`
 
 **Auth:**
-- Tenant endpoints → `Authorization: Bearer pt_your_api_key_here`
+- Vault endpoints → `Authorization: Bearer pt_your_api_key_here`
 - Admin endpoints → `X-Admin-Key: adm_your_admin_key_here`
 
 ---
@@ -12,13 +12,21 @@ Base URL: `https://your-persistio-instance`
 
 ### `GET /health`
 
-Returns 200 if the server is healthy. No authentication required.
+Returns the server health status including a live database ping. No authentication required by default. If `HEALTH_API_KEY` is configured on the server, requests must include `X-Health-Key: <value>`.
 
 **Response:** `200 OK`
 
 ```json
-{ "status": "ok" }
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "db": "ok",
+  "db_latency_ms": 12,
+  "uptime_s": 34
+}
 ```
+
+Returns `503` with `"status": "degraded"` if the database check fails.
 
 **curl**
 ```bash
@@ -29,14 +37,14 @@ curl https://your-persistio-instance/health
 ```js
 const res = await fetch('https://your-persistio-instance/health');
 const data = await res.json();
-console.log(data); // { status: 'ok' }
+console.log(data.status); // 'ok'
 ```
 
 **Python**
 ```python
 import httpx
 res = httpx.get('https://your-persistio-instance/health')
-print(res.json())  # {'status': 'ok'}
+print(res.json()['status'])  # 'ok'
 ```
 
 ---
@@ -184,7 +192,7 @@ memories = res.json()['memories']
 
 ### `GET /v1/memories`
 
-List memories for the current tenant with optional filters.
+List memories for the current vault with optional filters.
 
 **Auth:** Bearer token
 
@@ -211,7 +219,7 @@ const res = await fetch(
   'https://your-persistio-instance/v1/memories?limit=20&category=preferences',
   { headers: { 'Authorization': 'Bearer pt_your_api_key_here' } }
 );
-const { memories, total } = await res.json();
+const { items } = await res.json();
 ```
 
 **Python**
@@ -484,9 +492,9 @@ job = res.json()
 
 ## Admin
 
-### `POST /admin/tenants`
+### `POST /admin/vaults`
 
-Create a new tenant and receive its API key.
+Create a new vault and receive its API key.
 
 **Auth:** X-Admin-Key header
 
@@ -494,21 +502,20 @@ Create a new tenant and receive its API key.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | ✓ | Human-readable tenant name |
+| `name` | string | ✓ | Human-readable vault name |
 
 **Response:** `201 Created`
 
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "my-agent",
-  "apiKey": "pt_your_api_key_here"
+  "api_key": "pt_your_api_key_here"
 }
 ```
 
 **curl**
 ```bash
-curl -X POST https://your-persistio-instance/admin/tenants \
+curl -X POST https://your-persistio-instance/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-agent"}'
@@ -516,7 +523,7 @@ curl -X POST https://your-persistio-instance/admin/tenants \
 
 **Node.js**
 ```js
-const res = await fetch('https://your-persistio-instance/admin/tenants', {
+const res = await fetch('https://your-persistio-instance/admin/vaults', {
   method: 'POST',
   headers: {
     'X-Admin-Key': 'adm_your_admin_key_here',
@@ -524,7 +531,7 @@ const res = await fetch('https://your-persistio-instance/admin/tenants', {
   },
   body: JSON.stringify({ name: 'my-agent' }),
 });
-const tenant = await res.json();
+const { id, api_key } = await res.json();
 ```
 
 **Python**
@@ -532,35 +539,35 @@ const tenant = await res.json();
 import httpx
 
 res = httpx.post(
-    'https://your-persistio-instance/admin/tenants',
+    'https://your-persistio-instance/admin/vaults',
     headers={'X-Admin-Key': 'adm_your_admin_key_here'},
     json={'name': 'my-agent'},
 )
-tenant = res.json()
+vault = res.json()  # { 'id': '...', 'api_key': '...' }
 ```
 
 ---
 
-### `GET /admin/tenants`
+### `GET /admin/vaults`
 
-List all tenants.
+List all vaults.
 
 **Auth:** X-Admin-Key header
 
-**Response:** `200 OK` — array of tenant objects
+**Response:** `200 OK` — array of vault objects
 
 **curl**
 ```bash
-curl https://your-persistio-instance/admin/tenants \
+curl https://your-persistio-instance/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here"
 ```
 
 **Node.js**
 ```js
-const res = await fetch('https://your-persistio-instance/admin/tenants', {
+const res = await fetch('https://your-persistio-instance/admin/vaults', {
   headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
 });
-const tenants = await res.json();
+const { items } = await res.json();
 ```
 
 **Python**
@@ -568,17 +575,64 @@ const tenants = await res.json();
 import httpx
 
 res = httpx.get(
-    'https://your-persistio-instance/admin/tenants',
+    'https://your-persistio-instance/admin/vaults',
     headers={'X-Admin-Key': 'adm_your_admin_key_here'},
 )
-tenants = res.json()
+vaults = res.json()
 ```
 
 ---
 
-### `DELETE /admin/tenants/:id`
+### `POST /admin/vaults/:id/rotate-key`
 
-Delete a tenant and all associated data.
+Rotate the API key for a vault. The old key is immediately invalidated.
+
+**Auth:** X-Admin-Key header
+
+**Response:** `200 OK` or `404 Not Found`
+
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "api_key": "pt_new_api_key_here"
+}
+```
+
+**curl**
+```bash
+curl -X POST \
+  https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key \
+  -H "X-Admin-Key: adm_your_admin_key_here"
+```
+
+**Node.js**
+```js
+const res = await fetch(
+  'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key',
+  {
+    method: 'POST',
+    headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
+  }
+);
+const { api_key } = await res.json();
+```
+
+**Python**
+```python
+import httpx
+
+res = httpx.post(
+    'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key',
+    headers={'X-Admin-Key': 'adm_your_admin_key_here'},
+)
+new_key = res.json()['api_key']
+```
+
+---
+
+### `DELETE /admin/vaults/:id`
+
+Delete a vault and all associated data.
 
 **Auth:** X-Admin-Key header
 
@@ -587,14 +641,14 @@ Delete a tenant and all associated data.
 **curl**
 ```bash
 curl -X DELETE \
-  https://your-persistio-instance/admin/tenants/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
   -H "X-Admin-Key: adm_your_admin_key_here"
 ```
 
 **Node.js**
 ```js
 const res = await fetch(
-  'https://your-persistio-instance/admin/tenants/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   {
     method: 'DELETE',
     headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
@@ -607,7 +661,7 @@ const res = await fetch(
 import httpx
 
 res = httpx.delete(
-    'https://your-persistio-instance/admin/tenants/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     headers={'X-Admin-Key': 'adm_your_admin_key_here'},
 )
 ```
