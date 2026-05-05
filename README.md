@@ -8,7 +8,7 @@ Persistio is a self-hostable memory layer for AI agents and LLM applications. It
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](getting-started.md) | Run the server, create a tenant, and make your first ingest and recall calls |
+| [Getting Started](getting-started.md) | Run the server, create a vault, and make your first ingest and recall calls |
 | [API Reference](api-reference.md) | Full reference for every endpoint with curl, Node.js, and Python examples |
 | [Integration Guide](integration-guide.md) | Deep-dive patterns for building your own integration |
 
@@ -36,8 +36,8 @@ A managed instance is available at **[persistio.ai](https://persistio.ai)** — 
 git clone https://github.com/Persistio/server
 cd server && docker compose up -d
 
-# 2. Create a tenant
-curl -X POST https://your-persistio-instance/admin/tenants \
+# 2. Create a vault
+curl -X POST https://your-persistio-instance/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-agent"}'
