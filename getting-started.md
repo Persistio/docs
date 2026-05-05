@@ -21,10 +21,10 @@ cd server
 docker compose up -d
 ```
 
-The server starts on `http://localhost:3000` by default. Confirm it's healthy:
+The server starts on `http://localhost:4827` by default. Confirm it's healthy:
 
 ```bash
-curl http://localhost:3000/health
+curl http://localhost:4827/health
 # → 200 OK
 ```
 
@@ -37,12 +37,12 @@ See the [server README](https://github.com/Persistio/server) for environment var
 
 ---
 
-## 2. Create a Tenant
+## 2. Create a Vault
 
-Persistio is multi-tenant. Each tenant gets its own isolated memory store and API key. Admin calls use the `X-Admin-Key` header.
+Persistio is multi-vault. Each vault gets its own isolated memory store and API key. Admin calls use the `X-Admin-Key` header.
 
 ```bash
-curl -X POST https://your-persistio-instance/admin/tenants \
+curl -X POST https://your-persistio-instance/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
   -d '{"name": "my-agent"}'
@@ -53,15 +53,14 @@ Response:
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "my-agent",
-  "apiKey": "pt_your_api_key_here"
+  "api_key": "pt_your_api_key_here"
 }
 ```
 
-Save the `apiKey` — you'll use it as a Bearer token for all tenant API calls.
+Save the `api_key` — you'll use it as a Bearer token for all vault API calls.
 
 > **Auth summary:**
-> - Tenant API calls → `Authorization: Bearer <apiKey>`
+> - Vault API calls → `Authorization: Bearer <api_key>`
 > - Admin calls → `X-Admin-Key: <ADMIN_API_KEY>`
 
 ---
@@ -148,7 +147,7 @@ curl https://your-persistio-instance/v1/jobs/<job_id> \
   -H "Authorization: Bearer pt_your_api_key_here"
 ```
 
-See the [Integration Guide](integration-guide.md) for patterns on structuring ingest calls, recall strategies, and multi-tenant setups.
+See the [Integration Guide](integration-guide.md) for patterns on structuring ingest calls, recall strategies, and multi-vault setups.
 
 ---
 
