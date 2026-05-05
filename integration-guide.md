@@ -1,6 +1,6 @@
 # Integration Guide
 
-This guide is for developers building their own Persistio integration — without using the [openclaw-persistio](https://github.com/Persistio/openclaw-persistio) plugin. It covers the full memory lifecycle, practical ingest and recall patterns, memory management, multi-tenant setups, and error handling.
+This guide is for developers building their own Persistio integration — without using the [openclaw-persistio](https://github.com/Persistio/openclaw-persistio) plugin. It covers the full memory lifecycle, practical ingest and recall patterns, memory management, multi-vault setups, and error handling.
 
 ---
 
@@ -139,25 +139,34 @@ Categories are free-form string tags. Use them to organise memories and enable f
 
 ---
 
-## 5. Multi-Tenant Setup
+## 5. Multi-Vault Setup
 
-Persistio is designed for multi-tenant use. Each tenant has its own isolated memory store, so you can safely run multiple users or agents on a single Persistio instance.
+Persistio is designed for multi-vault use. Each vault has its own isolated memory store, so you can safely run multiple users or agents on a single Persistio instance.
 
-**One tenant per user:**
+**One vault per user:**
 ```bash
-# Create a tenant for each user at registration time
-POST /admin/tenants
+# Create a vault for each user at registration time
+POST /admin/vaults
 { "name": "user-alice" }
-→ { "id": "...", "apiKey": "pt_alice_key_here" }
+→ { "id": "...", "api_key": "pt_alice_key_here" }
 ```
 
-Store each user's `apiKey` in your own database. Use it as the Bearer token when ingesting or recalling for that user.
+Store each user's `api_key` in your own database. Use it as the Bearer token when ingesting or recalling for that user.
 
-**One tenant per agent:**
-If you're running multiple AI agents (e.g. a support agent, a research agent, a personal assistant), give each its own tenant to prevent memory bleed between contexts.
+**One vault per agent:**
+If you're running multiple AI agents (e.g. a support agent, a research agent, a personal assistant), give each its own vault to prevent memory bleed between contexts.
 
-**Shared tenant for a team:**
-For cases where multiple users share a memory pool (e.g. a team knowledge base), use a single tenant and differentiate via the `subject` field in memories or via categories.
+**Shared vault for a team:**
+For cases where multiple users share a memory pool (e.g. a team knowledge base), use a single vault and differentiate via the `subject` field in memories or via categories.
+
+**Rotating a vault's API key:**
+If a key is compromised, rotate it immediately. The old key is invalidated as soon as you call:
+
+```bash
+POST /admin/vaults/:id/rotate-key
+```
+
+See the [API Reference](api-reference.md) for full details.
 
 ---
 
