@@ -1,10 +1,20 @@
 # Persistio API Reference
 
-Base URL: `https://your-persistio-instance`
+Base URL examples use `https://your-persistio-instance`.
 
-**Auth:**
-- Vault endpoints → `Authorization: Bearer pt_your_api_key_here`
-- Admin endpoints → `X-Admin-Key: adm_your_admin_key_here`
+**Authentication**
+
+- Vault routes: `Authorization: Bearer pt_your_api_key_here`
+- Admin routes: `X-Admin-Key: adm_your_admin_key_here` or `Authorization: Bearer adm_your_admin_key_here`
+- Health route: no auth unless `HEALTH_API_KEY` is configured, then `X-Health-Key: <value>`
+
+Quota-enforced routes may return `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After`.
+
+Common explicit error shape:
+
+```json
+{ "error": "Message" }
+```
 
 ---
 
@@ -12,39 +22,27 @@ Base URL: `https://your-persistio-instance`
 
 ### `GET /health`
 
-Returns the server health status including a live database ping. No authentication required by default. If `HEALTH_API_KEY` is configured on the server, requests must include `X-Health-Key: <value>`.
+Returns service health, server version, database latency, and queue depths.
 
-**Response:** `200 OK`
+**Response:** `200 OK` when healthy, `503 Service Unavailable` when degraded.
 
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.1.9",
   "db": "ok",
   "db_latency_ms": 12,
+  "extraction_queue_depth": 0,
+  "curation_queue_depth": 0,
+  "queue_depth": 0,
   "uptime_s": 34
 }
 ```
 
-Returns `503` with `"status": "degraded"` if the database check fails.
-
 **curl**
+
 ```bash
 curl https://your-persistio-instance/health
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/health');
-const data = await res.json();
-console.log(data.status); // 'ok'
-```
-
-**Python**
-```python
-import httpx
-res = httpx.get('https://your-persistio-instance/health')
-print(res.json()['status'])  # 'ok'
 ```
 
 ---
@@ -53,70 +51,50 @@ print(res.json()['status'])  # 'ok'
 
 ### `POST /v1/ingest`
 
-Ingest a conversation session. Chunks are stored immediately; memory extraction happens asynchronously.
+Append raw conversation chunks, embed them, group them into segments, and enqueue extraction work.
 
 **Auth:** Bearer token
 
-**Request body:**
+**Request body**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `session_id` | string | ✓ | Unique identifier for this conversation session |
-| `chunks` | array | ✓ | Array of conversation chunks |
-| `chunks[].role` | string | ✓ | `"user"`, `"assistant"`, or `"tool"` |
-| `chunks[].content` | string | ✓ | The message content |
+| `session_id` | string | yes | Logical conversation/session identifier |
+| `chunks` | array | yes | Non-empty array of conversation chunks |
+| `chunks[].role` | string | yes | `user`, `assistant`, or `tool` |
+| `chunks[].content` | string | yes | Non-empty message content |
+| `chunks[].timestamp` | string | yes | ISO datetime for the source message |
 
 **Response:** `202 Accepted`
 
+```json
+{
+  "accepted": 2,
+  "chunks": [
+    {
+      "id": "2a2b46b4-5f8b-4ebf-9817-2dfaf0665ca4",
+      "created_at": "2026-05-19T12:00:00.000Z"
+    }
+  ]
+}
+```
+
 **curl**
+
 ```bash
 curl -X POST https://your-persistio-instance/v1/ingest \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
   -d '{
-    "session_id": "session-2024-001",
+    "session_id": "session-2026-001",
     "chunks": [
-      { "role": "user", "content": "My name is Alice." },
-      { "role": "assistant", "content": "Nice to meet you, Alice." }
+      {
+        "role": "user",
+        "content": "My name is Alice.",
+        "timestamp": "2026-05-19T12:00:00.000Z"
+      }
     ]
   }'
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/ingest', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer pt_your_api_key_here',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    session_id: 'session-2024-001',
-    chunks: [
-      { role: 'user', content: 'My name is Alice.' },
-      { role: 'assistant', content: 'Nice to meet you, Alice.' },
-    ],
-  }),
-});
-// 202 Accepted
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.post(
-    'https://your-persistio-instance/v1/ingest',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-    json={
-        'session_id': 'session-2024-001',
-        'chunks': [
-            {'role': 'user', 'content': 'My name is Alice.'},
-            {'role': 'assistant', 'content': 'Nice to meet you, Alice.'},
-        ],
-    },
-)
-# res.status_code == 202
 ```
 
 ---
@@ -125,65 +103,104 @@ res = httpx.post(
 
 ### `POST /v1/recall`
 
-Retrieve memories semantically relevant to a query. Use this to prime your agent's context at the start of a session.
+Retrieve semantic memory matches, optional evidence chunks, optional raw chunks, or a structured agent bundle.
 
 **Auth:** Bearer token
 
-**Request body:**
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `format` | string | Use `bundle` to return grouped prompt context instead of default arrays |
+
+**Request body**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `query` | string | ✓ | Natural language query |
-| `top_k` | integer | | Number of memories to return (default: 10) |
-| `include_raw` | boolean | | If true, includes raw ingested chunks alongside extracted memories |
+| `query` | string | yes | Natural language query |
+| `top_k` | integer | no | Positive integer up to 100; defaults to server `DEFAULT_RECALL_TOP_K` |
+| `include_raw` | boolean | no | Return semantically matching raw chunks in `raw_chunks`; default `false` |
+| `include_evidence` | boolean | no | Return source-linked chunks for returned memories; default `false` |
+| `mode` | string | no | `agent` or `factual`; default `agent` |
 
-**Response:** `200 OK`
+**Default response:** `200 OK`
 
 ```json
 {
   "memories": [
     {
-      "id": "mem_abc123",
-      "data": "User's name is Alice.",
-      "score": 0.95,
-      "categories": ["identity"]
+      "id": "b5f7b2bb-d0f1-44a9-b10d-8d9d8d346a11",
+      "data": "User prefers concise answers.",
+      "subject": "alice",
+      "categories": ["preferences"],
+      "confidence": 1,
+      "score": 8,
+      "salience": "0.80",
+      "sensitivity": "low",
+      "type": "user_preference",
+      "scope": "global",
+      "polarity": "neutral",
+      "status": "active",
+      "valid_from": null,
+      "valid_until": null,
+      "similarity": 0.94,
+      "source": "semantic",
+      "created_at": "2026-05-19T12:00:00.000Z",
+      "updated_at": "2026-05-19T12:00:00.000Z",
+      "recall_count": 4,
+      "last_recalled": "2026-05-19T12:10:00.000Z"
     }
   ],
-  "raw": []
+  "evidence_chunks": [],
+  "raw_chunks": []
 }
 ```
 
+When `include_evidence` is true, `evidence_chunks` contains source chunks linked to returned memories:
+
+```json
+{
+  "memory_id": "b5f7b2bb-d0f1-44a9-b10d-8d9d8d346a11",
+  "id": "2a2b46b4-5f8b-4ebf-9817-2dfaf0665ca4",
+  "session_id": "session-2026-001",
+  "role": "user",
+  "content": "My name is Alice.",
+  "created_at": "2026-05-19T12:00:00.000Z"
+}
+```
+
+When `include_raw` is true, `raw_chunks` contains semantically matching raw chunks with `similarity`.
+
+**Bundle response**
+
+Request `POST /v1/recall?format=bundle` to receive grouped prompt context:
+
+```json
+{
+  "bundle": {
+    "global_user_rules": [],
+    "user_rules": [],
+    "user_preferences": ["User prefers concise answers."],
+    "task_patterns": [],
+    "workflows": [],
+    "project": [],
+    "constraints": [],
+    "decisions": [],
+    "system_facts": [],
+    "domain_knowledge": []
+  }
+}
+```
+
+In `agent` bundle mode, up to 5 active global `user_rule` memories are included in `global_user_rules` without consuming the query `top_k` budget. Query-relevant sections come from semantic and graph recall.
+
 **curl**
+
 ```bash
-curl -X POST https://your-persistio-instance/v1/recall \
+curl -X POST "https://your-persistio-instance/v1/recall?format=bundle" \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"query": "what is the user'\''s name?", "top_k": 5}'
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/recall', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer pt_your_api_key_here',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({ query: "what is the user's name?", top_k: 5 }),
-});
-const { memories } = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.post(
-    'https://your-persistio-instance/v1/recall',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-    json={'query': "what is the user's name?", 'top_k': 5},
-)
-memories = res.json()['memories']
+  -d '{"query":"current user context","top_k":10,"mode":"agent"}'
 ```
 
 ---
@@ -192,300 +209,166 @@ memories = res.json()['memories']
 
 ### `GET /v1/memories`
 
-List memories for the current vault with optional filters.
+List memories for the current vault.
 
 **Auth:** Bearer token
 
-**Query parameters:**
+**Query parameters**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `archived` | bool | Include archived memories (default: false) |
-| `category` | string | Filter by category |
-| `limit` | int | Page size (default: 50) |
-| `offset` | int | Pagination offset (default: 0) |
+| `archived` | boolean string | `false` by default; `true` returns archived memories |
+| `category` | string | Filter to memories containing the category |
+| `include_children` | boolean | Include descendants through `parent_id` hierarchy |
+| `limit` | integer | Page size, `1..200`, default `50` |
+| `offset` | integer | Pagination offset, default `0` |
 
-**Response:** `200 OK` — paginated list of memories
+**Response:** `200 OK`
 
-**curl**
-```bash
-curl "https://your-persistio-instance/v1/memories?limit=20&category=preferences" \
-  -H "Authorization: Bearer pt_your_api_key_here"
+```json
+{
+  "items": [],
+  "limit": 50,
+  "offset": 0
+}
 ```
-
-**Node.js**
-```js
-const res = await fetch(
-  'https://your-persistio-instance/v1/memories?limit=20&category=preferences',
-  { headers: { 'Authorization': 'Bearer pt_your_api_key_here' } }
-);
-const { items } = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.get(
-    'https://your-persistio-instance/v1/memories',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-    params={'limit': 20, 'category': 'preferences'},
-)
-data = res.json()
-```
-
----
 
 ### `POST /v1/memories`
 
-Create a memory directly, without going through the ingest/extract pipeline.
+Create a memory directly.
 
 **Auth:** Bearer token
 
-**Request body:**
+**Request body**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `data` | string | ✓ | The memory content |
-| `subject` | string | ✓ | Who or what the memory is about |
-| `categories` | string[] | | Optional category tags |
+| `data` | string | yes | Fact statement |
+| `subject` | string | yes | Subject the fact is about |
+| `categories` | string[] | no | Free-form tags |
+| `parent_id` | uuid or null | no | Parent memory in a hierarchy |
+| `type` | string | no | `user_preference`, `user_rule`, `task_pattern`, `workflow`, `project`, `constraint`, `decision`, `system_fact`, or `domain_knowledge`; default `system_fact` |
+| `scope` | string | no | `global`, `project`, `task`, or `session`; default `global` |
+| `evidence` | string | no | Evidence summary stored as structured provenance |
+| `volatility` | string | no | `very_low`, `low`, `medium`, or `high`; default `low` |
 
 **Response:** `201 Created`
 
-**curl**
 ```bash
 curl -X POST https://your-persistio-instance/v1/memories \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"data": "User prefers dark mode.", "subject": "alice", "categories": ["preferences"]}'
+  -d '{
+    "data": "User prefers concise answers.",
+    "subject": "alice",
+    "categories": ["preferences"],
+    "type": "user_preference",
+    "scope": "global"
+  }'
 ```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/memories', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer pt_your_api_key_here',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    data: 'User prefers dark mode.',
-    subject: 'alice',
-    categories: ['preferences'],
-  }),
-});
-// 201 Created
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.post(
-    'https://your-persistio-instance/v1/memories',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-    json={'data': 'User prefers dark mode.', 'subject': 'alice', 'categories': ['preferences']},
-)
-# res.status_code == 201
-```
-
----
 
 ### `GET /v1/memories/:id`
 
-Retrieve a single memory by ID.
+Fetch one memory by UUID.
 
 **Auth:** Bearer token
 
 **Response:** `200 OK` or `404 Not Found`
-
-**curl**
-```bash
-curl https://your-persistio-instance/v1/memories/mem_abc123 \
-  -H "Authorization: Bearer pt_your_api_key_here"
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/memories/mem_abc123', {
-  headers: { 'Authorization': 'Bearer pt_your_api_key_here' },
-});
-const memory = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.get(
-    'https://your-persistio-instance/v1/memories/mem_abc123',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-)
-memory = res.json()
-```
-
----
 
 ### `PATCH /v1/memories/:id`
 
-Update a memory's content or metadata.
+Update memory content or metadata.
 
 **Auth:** Bearer token
 
-**Response:** `200 OK` or `404 Not Found`
+Mutable fields: `data`, `subject`, `categories`, `confidence`, `type`, `scope`, `evidence`, and `archived`.
 
-**curl**
 ```bash
-curl -X PATCH https://your-persistio-instance/v1/memories/mem_abc123 \
+curl -X PATCH https://your-persistio-instance/v1/memories/b5f7b2bb-d0f1-44a9-b10d-8d9d8d346a11 \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"data": "User prefers dark mode and high contrast."}'
+  -d '{"data":"User prefers concise answers and bullet summaries.","archived":false}'
 ```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/memories/mem_abc123', {
-  method: 'PATCH',
-  headers: {
-    'Authorization': 'Bearer pt_your_api_key_here',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({ data: 'User prefers dark mode and high contrast.' }),
-});
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.patch(
-    'https://your-persistio-instance/v1/memories/mem_abc123',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-    json={'data': 'User prefers dark mode and high contrast.'},
-)
-```
-
----
 
 ### `DELETE /v1/memories/:id`
 
-Archive a memory (soft delete). Archived memories are excluded from recall by default but can be retrieved with `?archived=true`.
+Archive a memory. This is a soft delete; archived memories are excluded from recall.
 
 **Auth:** Bearer token
 
 **Response:** `200 OK` or `404 Not Found`
 
-**curl**
-```bash
-curl -X DELETE https://your-persistio-instance/v1/memories/mem_abc123 \
-  -H "Authorization: Bearer pt_your_api_key_here"
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/memories/mem_abc123', {
-  method: 'DELETE',
-  headers: { 'Authorization': 'Bearer pt_your_api_key_here' },
-});
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.delete(
-    'https://your-persistio-instance/v1/memories/mem_abc123',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-)
-```
-
 ---
 
-## Extraction
+## Extraction Jobs
 
 ### `POST /v1/extract`
 
-Trigger an extraction job immediately. Normally extraction runs automatically via the daemon; call this when you need memories available without delay.
+Trigger a worker pass for the current vault.
 
 **Auth:** Bearer token
 
 **Response:** `202 Accepted`
 
 ```json
-{ "job_id": "job_xyz789" }
+{ "job_id": "1d5f84d3-52a2-47c1-90a5-37889f8f71be" }
 ```
 
-**curl**
-```bash
-curl -X POST https://your-persistio-instance/v1/extract \
-  -H "Authorization: Bearer pt_your_api_key_here"
-```
+### `GET /v1/jobs/:id`
 
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/extract', {
-  method: 'POST',
-  headers: { 'Authorization': 'Bearer pt_your_api_key_here' },
-});
-const { job_id } = await res.json();
-```
+Check a manually triggered extraction job.
 
-**Python**
-```python
-import httpx
+**Auth:** Bearer token
 
-res = httpx.post(
-    'https://your-persistio-instance/v1/extract',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-)
-job_id = res.json()['job_id']
+Status values: `queued`, `running`, `completed`, `failed`.
+
+```json
+{
+  "id": "1d5f84d3-52a2-47c1-90a5-37889f8f71be",
+  "vaultId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "completed",
+  "createdAt": "2026-05-19T12:00:00.000Z",
+  "updatedAt": "2026-05-19T12:00:04.000Z"
+}
 ```
 
 ---
 
-### `GET /v1/jobs/:id`
+## Stats
 
-Check the status of an extraction job.
+### `GET /stats`
+
+Fetch vault plan, usage, limits, memory counts, entity alias count, and contradiction scan metadata.
 
 **Auth:** Bearer token
 
-**Response:** `200 OK` or `404 Not Found`
+**Response:** `200 OK`
 
 ```json
 {
-  "id": "job_xyz789",
-  "status": "completed",
-  "memories_created": 3,
-  "created_at": "2024-05-01T12:00:00Z",
-  "completed_at": "2024-05-01T12:00:04Z"
+  "vault_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "plan": "free",
+  "period": "2026-05",
+  "memories": {
+    "active": 12,
+    "candidate": 0,
+    "needs_review": 0,
+    "contradicted": 0,
+    "superseded": 1,
+    "archived": 2,
+    "limit": 1000
+  },
+  "entity_aliases": 3,
+  "contradiction_scan": {
+    "last_run": null,
+    "arbitrations_this_week": 0
+  },
+  "usage": {
+    "ingest_events": { "consumed": 20, "limit": 1000 },
+    "memory_adds": { "consumed": 4, "limit": 100 },
+    "searches": { "consumed": 37, "limit": 5000 }
+  }
 }
-```
-
-Status values: `pending`, `running`, `completed`, `failed`
-
-**curl**
-```bash
-curl https://your-persistio-instance/v1/jobs/job_xyz789 \
-  -H "Authorization: Bearer pt_your_api_key_here"
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/v1/jobs/job_xyz789', {
-  headers: { 'Authorization': 'Bearer pt_your_api_key_here' },
-});
-const job = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.get(
-    'https://your-persistio-instance/v1/jobs/job_xyz789',
-    headers={'Authorization': 'Bearer pt_your_api_key_here'},
-)
-job = res.json()
 ```
 
 ---
@@ -494,102 +377,75 @@ job = res.json()
 
 ### `POST /admin/vaults`
 
-Create a new vault and receive its API key.
+Create a vault and receive its API key.
 
-**Auth:** X-Admin-Key header
+**Auth:** `X-Admin-Key` or Bearer admin key
 
-**Request body:**
+**Request body**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | ✓ | Human-readable vault name |
+| `name` | string | yes | Vault name |
+| `purpose` | string | no | Vault-specific context used by extraction |
+| `plan` | string | no | `free`, `starter`, or `pro`; default `free` |
 
 **Response:** `201 Created`
 
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "my-agent",
+  "purpose": "Personal assistant memory",
+  "plan": "free",
   "api_key": "pt_your_api_key_here"
 }
 ```
 
-**curl**
-```bash
-curl -X POST https://your-persistio-instance/admin/vaults \
-  -H "X-Admin-Key: adm_your_admin_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-agent"}'
-```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/admin/vaults', {
-  method: 'POST',
-  headers: {
-    'X-Admin-Key': 'adm_your_admin_key_here',
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({ name: 'my-agent' }),
-});
-const { id, api_key } = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.post(
-    'https://your-persistio-instance/admin/vaults',
-    headers={'X-Admin-Key': 'adm_your_admin_key_here'},
-    json={'name': 'my-agent'},
-)
-vault = res.json()  # { 'id': '...', 'api_key': '...' }
-```
-
----
-
 ### `GET /admin/vaults`
 
-List all vaults.
+List vaults.
 
-**Auth:** X-Admin-Key header
+**Auth:** `X-Admin-Key` or Bearer admin key
 
-**Response:** `200 OK` — array of vault objects
+**Response:** `200 OK`
 
-**curl**
+```json
+{
+  "items": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "my-agent",
+      "purpose": "Personal assistant memory",
+      "created_at": "2026-05-19T12:00:00.000Z",
+      "settings": { "embedding_dimensions": 1536 },
+      "plan_id": "free",
+      "account_id": null,
+      "vault_encryption_enabled": false
+    }
+  ]
+}
+```
+
+### `PATCH /admin/vaults/:id`
+
+Update a vault's `name`, `purpose`, or `plan`.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
 ```bash
-curl https://your-persistio-instance/admin/vaults \
-  -H "X-Admin-Key: adm_your_admin_key_here"
+curl -X PATCH https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
+  -H "X-Admin-Key: adm_your_admin_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"purpose":"Memory for support assistant","plan":"starter"}'
 ```
-
-**Node.js**
-```js
-const res = await fetch('https://your-persistio-instance/admin/vaults', {
-  headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
-});
-const { items } = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.get(
-    'https://your-persistio-instance/admin/vaults',
-    headers={'X-Admin-Key': 'adm_your_admin_key_here'},
-)
-vaults = res.json()
-```
-
----
 
 ### `POST /admin/vaults/:id/rotate-key`
 
-Rotate the API key for a vault. The old key is immediately invalidated.
+Rotate a vault API key. The old key is invalidated immediately.
 
-**Auth:** X-Admin-Key header
+**Auth:** `X-Admin-Key` or Bearer admin key
 
-**Response:** `200 OK` or `404 Not Found`
+**Response:** `200 OK`
 
 ```json
 {
@@ -598,70 +454,10 @@ Rotate the API key for a vault. The old key is immediately invalidated.
 }
 ```
 
-**curl**
-```bash
-curl -X POST \
-  https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key \
-  -H "X-Admin-Key: adm_your_admin_key_here"
-```
-
-**Node.js**
-```js
-const res = await fetch(
-  'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key',
-  {
-    method: 'POST',
-    headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
-  }
-);
-const { api_key } = await res.json();
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.post(
-    'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890/rotate-key',
-    headers={'X-Admin-Key': 'adm_your_admin_key_here'},
-)
-new_key = res.json()['api_key']
-```
-
----
-
 ### `DELETE /admin/vaults/:id`
 
-Delete a vault and all associated data.
+Delete a vault and its associated data.
 
-**Auth:** X-Admin-Key header
+**Auth:** `X-Admin-Key` or Bearer admin key
 
 **Response:** `200 OK` or `404 Not Found`
-
-**curl**
-```bash
-curl -X DELETE \
-  https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
-  -H "X-Admin-Key: adm_your_admin_key_here"
-```
-
-**Node.js**
-```js
-const res = await fetch(
-  'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-  {
-    method: 'DELETE',
-    headers: { 'X-Admin-Key': 'adm_your_admin_key_here' },
-  }
-);
-```
-
-**Python**
-```python
-import httpx
-
-res = httpx.delete(
-    'https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-    headers={'X-Admin-Key': 'adm_your_admin_key_here'},
-)
-```
