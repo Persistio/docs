@@ -1,234 +1,255 @@
 # Integration Guide
 
-This guide is for developers building their own Persistio integration — without using the [openclaw-persistio](https://github.com/Persistio/openclaw-persistio) plugin. It covers the full memory lifecycle, practical ingest and recall patterns, memory management, multi-vault setups, and error handling.
+This guide is for developers integrating Persistio directly or through the OpenClaw plugin. It covers ingest, recall, memory management, quotas, multi-vault setups, and plugin behavior.
 
 ---
 
-## 1. The Memory Lifecycle
+## 1. Memory Lifecycle
 
-Persistio uses a **two-layer model**:
+Persistio uses a two-layer model:
 
-```
+```text
 Raw conversation chunks
-        ↓  (ingest)
-   Stored chunks
-        ↓  (async extraction daemon)
-  Durable memories
-        ↓  (semantic recall)
-  Retrieved context
+        -> segments
+        -> async extraction worker
+        -> durable memories and embeddings
+        -> semantic and graph-assisted recall
+        -> retrieved context
 ```
 
-**Layer 1 — Raw chunks:** When you call `POST /v1/ingest`, the conversation chunks are stored immediately. This is fast and cheap — no LLM processing happens here.
+`POST /v1/ingest` is the write path. It stores chunks, embeds them, groups them into segments, and queues extraction. Recall is the read path. It retrieves active memories from `memory_embeddings`, optionally expands through directed `memory_edges`, and can return raw evidence.
 
-**Layer 2 — Durable memories:** The extraction daemon picks up ingested chunks and runs an LLM-powered pass to identify facts, preferences, events, and relationships worth remembering. These become structured, searchable memories.
-
-**Why ingest first and recall later?** Ingest is a write operation that happens *after* a conversation. Recall is a read operation that happens *before* the next one. The two-layer model means your agent can finish a session, safely hand off to the extraction daemon, and start the next session with enriched context — without blocking on LLM extraction during the live conversation.
+For Pro vaults with curation enabled, extraction can write candidate memories first. The curation worker promotes, updates, archives, or links them into a graph.
 
 ---
 
-## 2. Structuring Your Ingest Calls
+## 2. Structuring Ingest Calls
 
-### When to call ingest
-
-**End-of-session (recommended):** Call `POST /v1/ingest` once when the conversation ends, sending all chunks in one request. This is the simplest pattern and gives the extraction daemon the full context to work with.
-
-**Streaming during a session:** If sessions are very long, you can call ingest incrementally using the same `session_id`. Persistio deduplicates by session ID — repeated calls append to the existing session rather than creating duplicates.
-
-### How to group chunks
-
-Send all chunks for a single logical conversation in one ingest call. Don't split a single session across multiple `session_id` values — the extraction daemon needs the full thread to derive useful memories.
+Send all chunks for one logical conversation under one `session_id`. Each chunk requires a source timestamp.
 
 ```json
 {
-  "session_id": "user-alice-2024-05-01-session-1",
+  "session_id": "user-alice-2026-05-19-session-1",
   "chunks": [
-    { "role": "user", "content": "..." },
-    { "role": "assistant", "content": "..." },
-    { "role": "tool", "content": "..." }
+    {
+      "role": "user",
+      "content": "I prefer concise answers.",
+      "timestamp": "2026-05-19T12:00:00.000Z"
+    },
+    {
+      "role": "assistant",
+      "content": "Understood.",
+      "timestamp": "2026-05-19T12:00:05.000Z"
+    }
   ]
 }
 ```
 
-Include `tool` role chunks when they contain meaningful context (e.g. search results, function outputs). You can omit them if they're noisy.
+Use `tool` chunks only when tool output contains durable context. Noisy tool logs should be filtered before ingest.
 
-### session_id best practices
-
-- Make `session_id` **globally unique per session**, not per user. A good pattern: `{user_id}-{date}-{session_number}` or a UUID.
-- **Don't reuse** session IDs across different conversations — it will merge unrelated chunks.
-- Store session IDs in your own database if you need to append to in-progress sessions.
+Persistio segments only the chunks in the current ingest request. For best extraction quality, batch enough adjacent messages to provide context. Segments use a minimum size of 3, maximum size of 40, and semantic split threshold from `SEGMENTATION_THRESHOLD`.
 
 ---
 
 ## 3. Recall Patterns
 
-### Prime context at session start
+### Default recall
 
-The most important pattern: at the start of every new session, recall relevant memories and prepend them to your system prompt.
+Use default recall when you want ranked memory objects:
 
 ```js
-// At session start
-const { memories } = await recall(query, { top_k: 10 });
+const res = await fetch(`${baseURL}/v1/recall`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    query: 'what does this user prefer?',
+    top_k: 10,
+    include_evidence: true,
+    mode: 'agent'
+  })
+});
 
-const systemPrompt = `
-You are a helpful assistant. Here is what you know about this user:
-
-${memories.map(m => `- ${m.data}`).join('\n')}
-
-Use this context to personalise your responses.
-`.trim();
+const { memories, evidence_chunks } = await res.json();
 ```
 
-### Choosing top_k
+Use `include_evidence` when you need source-linked raw chunks for returned memories. Use `include_raw` when you want semantic raw chunk matches alongside memory matches.
 
-- Start with `top_k: 5–10` for most use cases
-- Increase for agents that need broader context (research assistants, long-running projects)
-- Decrease for tight, focused queries where precision matters more than breadth
-- There's no penalty for requesting more than exist — Persistio returns however many are available up to `top_k`
+### Bundle recall
 
-### What `include_raw` does
+Use `?format=bundle` when assembling an agent prompt:
 
-Setting `include_raw: true` returns the raw ingested chunks (actual conversation excerpts) alongside extracted memories. Use this when:
-- You want verbatim quotes, not summaries
-- Debugging what was ingested
-- Your application needs to cite the original conversation
+```js
+const res = await fetch(`${baseURL}/v1/recall?format=bundle`, {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    query: 'current user and project context',
+    top_k: 10,
+    mode: 'agent'
+  })
+});
 
-For most production use cases, extracted memories are more useful — they're concise and already structured.
+const { bundle } = await res.json();
+```
+
+Bundle keys map memory types into stable prompt sections:
+
+- `global_user_rules`
+- `user_rules`
+- `user_preferences`
+- `task_patterns`
+- `workflows`
+- `project`
+- `constraints`
+- `decisions`
+- `system_facts`
+- `domain_knowledge`
+
+In `agent` bundle mode, active global `user_rule` memories are returned separately so important behavioral rules do not consume the query `top_k` budget.
 
 ---
 
 ## 4. Managing Memories
 
-### Listing
-
-Use `GET /v1/memories` to browse what's been extracted. Useful for building admin UIs, debugging, or auditing what your agent knows.
-
-```bash
-# Get most recent memories
-GET /v1/memories?limit=20&offset=0
-
-# Filter by category
-GET /v1/memories?category=preferences
-
-# Include archived memories
-GET /v1/memories?archived=true
-```
-
-### Updating
-
-Use `PATCH /v1/memories/:id` to correct or enrich a memory. This is useful when you detect that the extraction daemon produced an inaccurate or outdated memory:
+Create memories directly when an application has a verified durable fact:
 
 ```json
-PATCH /v1/memories/mem_abc123
-{ "data": "User is based in London, not New York (updated 2024-05)." }
+{
+  "data": "User prefers concise answers.",
+  "subject": "alice",
+  "categories": ["preferences"],
+  "type": "user_preference",
+  "scope": "global",
+  "evidence": "User stated this preference in onboarding.",
+  "volatility": "low"
+}
 ```
 
-### Archiving
+Use these metadata fields consistently:
 
-`DELETE /v1/memories/:id` performs a **soft delete** — the memory is archived, not permanently removed. Archived memories are excluded from recall by default but can be retrieved with `?archived=true`.
+| Field | Recommended use |
+|-------|-----------------|
+| `type` | Drives bundle grouping and downstream prompt structure |
+| `scope` | Distinguishes global, project, task, and session-local memories |
+| `categories` | Lightweight tags for filtering and UI organization |
+| `parent_id` | Hierarchies and grouped memory trees |
+| `evidence` | Short provenance summary |
+| `volatility` | How often the fact is expected to change |
 
-Use archiving to prune stale information without losing history.
-
-### Categories
-
-Categories are free-form string tags. Use them to organise memories and enable filtered recall. Suggested conventions:
-- `identity` — name, location, role
-- `preferences` — communication style, tool preferences, formats
-- `projects` — ongoing work, goals
-- `relationships` — people, teams, organisations
-- `events` — meetings, deadlines, milestones
+Archive stale memories with `DELETE /v1/memories/:id` or `PATCH /v1/memories/:id` with `"archived": true`. Archived memories are excluded from recall and list results unless requested with `archived=true`.
 
 ---
 
-## 5. Multi-Vault Setup
+## 5. Quotas and Stats
 
-Persistio is designed for multi-vault use. Each vault has its own isolated memory store, so you can safely run multiple users or agents on a single Persistio instance.
+Quota is enforced on:
 
-**One vault per user:**
-```bash
-# Create a vault for each user at registration time
-POST /admin/vaults
-{ "name": "user-alice" }
-→ { "id": "...", "api_key": "pt_alice_key_here" }
-```
+- `POST /v1/ingest` as `ingest_events`
+- `POST /v1/recall` as `searches`
+- `POST /v1/memories` as `memory_adds`, plus memory capacity checks
 
-Store each user's `api_key` in your own database. Use it as the Bearer token when ingesting or recalling for that user.
-
-**One vault per agent:**
-If you're running multiple AI agents (e.g. a support agent, a research agent, a personal assistant), give each its own vault to prevent memory bleed between contexts.
-
-**Shared vault for a team:**
-For cases where multiple users share a memory pool (e.g. a team knowledge base), use a single vault and differentiate via the `subject` field in memories or via categories.
-
-**Rotating a vault's API key:**
-If a key is compromised, rotate it immediately. The old key is invalidated as soon as you call:
+Read plan, usage, limits, memory status counts, alias count, and contradiction-scan metadata from:
 
 ```bash
-POST /admin/vaults/:id/rotate-key
+curl https://your-persistio-instance/stats \
+  -H "Authorization: Bearer pt_your_api_key_here"
 ```
 
-See the [API Reference](api-reference.md) for full details.
+Back off on `429` and use the returned rate-limit headers when present.
 
 ---
 
-## 6. Error Handling
+## 6. Multi-Vault Setup
 
-### Common status codes
+Use one vault per tenant, user, agent, or isolated memory boundary.
+
+```bash
+curl -X POST https://your-persistio-instance/admin/vaults \
+  -H "X-Admin-Key: adm_your_admin_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"user-alice","purpose":"Alice assistant memory","plan":"starter"}'
+```
+
+Store each vault API key in your own secrets store and use it only for that tenant's vault-scoped requests.
+
+Rotate compromised keys immediately:
+
+```bash
+curl -X POST https://your-persistio-instance/admin/vaults/<vault-id>/rotate-key \
+  -H "X-Admin-Key: adm_your_admin_key_here"
+```
+
+---
+
+## 7. OpenClaw Plugin
+
+The current package is `@persistio/openclaw-plugin` `0.1.4`.
+
+It hooks into:
+
+- `before_prompt_build` to recall memory and inject it into the prompt within `tokenBudget`
+- `agent_end` to ingest transcript messages after each run
+- OpenClaw memory capability registration so Persistio memories are searchable through OpenClaw's memory backend
+
+It exposes these tools:
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Semantic recall over the vault |
+| `memory_add` | Store a fact manually |
+| `memory_delete` | Delete/archive a memory by ID |
+| `memory_list` | List vault memories |
+
+Configuration:
+
+```json
+{
+  "baseURL": "https://api.persistio.ai",
+  "apiKey": "pt_your_api_key_here",
+  "tokenBudget": 2000,
+  "recallTopK": 10,
+  "recallTimeout": 5000,
+  "send": {
+    "roles": {
+      "user": "enabled",
+      "agent": "enabled",
+      "tool": "disabled"
+    }
+  }
+}
+```
+
+The plugin deduplicates transcript messages per session in-process and expires deduplication keys after 24 hours of session inactivity. Tool messages are disabled by default because they are often noisy.
+
+---
+
+## 8. Error Handling
+
+Common status codes:
 
 | Code | Meaning |
 |------|---------|
-| `202` | Accepted — async operation queued (ingest, extract) |
-| `400` | Bad request — check your request body |
-| `401` | Unauthorised — invalid or missing API key |
-| `404` | Not found — memory or job ID doesn't exist |
-| `429` | Rate limited — back off and retry |
-| `500` | Server error — retry with exponential backoff |
+| `202` | Accepted; async operation queued |
+| `400` | Invalid request body or parent ownership |
+| `401` | Missing or invalid auth |
+| `404` | Memory, job, or vault not found |
+| `429` | Quota exceeded |
+| `500` | Server error |
+| `503` | Degraded health or dependency failure |
 
-### Retry strategy
-
-- `429` and `5xx` errors are safe to retry
-- Use **exponential backoff**: start at 1s, double each attempt, cap at ~30s
-- Add jitter to avoid thundering herd if you're running many agents concurrently
-- `4xx` errors (except 429) indicate a problem with your request — don't retry without fixing the input
-
-### Ingest is idempotent
-
-If an ingest call fails mid-way and you retry with the same `session_id`, Persistio deduplicates the chunks. It's safe to retry ingest calls.
-
----
-
-## 7. A Note on Extraction Timing
-
-The extraction daemon runs **asynchronously** in the background. There is a delay — typically a few seconds — between calling `POST /v1/ingest` and those memories being available via `POST /v1/recall`.
-
-For most applications this is fine: you ingest at the end of session N, and recall at the start of session N+1, by which time extraction has long since completed.
-
-**For time-sensitive use cases** — e.g. you need memories available immediately within the same session — trigger extraction manually:
-
-```bash
-# Step 1: Ingest
-POST /v1/ingest
-→ 202 Accepted
-
-# Step 2: Trigger extraction
-POST /v1/extract
-→ { "job_id": "job_xyz789" }
-
-# Step 3: Poll until complete
-GET /v1/jobs/job_xyz789
-→ { "status": "running", ... }
-→ { "status": "completed", "memories_created": 4 }
-
-# Step 4: Recall
-POST /v1/recall
-→ { "memories": [...] }
-```
-
-Poll `GET /v1/jobs/:id` every 1–2 seconds. The job typically completes within 3–10 seconds depending on session length and LLM latency. Once `status` is `"completed"`, your memories are available.
+Retry `429` and transient `5xx` responses with exponential backoff and jitter. Do not retry validation failures without changing the request.
 
 ---
 
 ## Further Reading
 
-- [Getting Started](getting-started.md) — end-to-end walkthrough
-- [API Reference](api-reference.md) — full endpoint specs
-- [Persistio/openclaw-persistio](https://github.com/Persistio/openclaw-persistio) — drop-in plugin for OpenClaw users
+- [Getting Started](getting-started.md)
+- [API Reference](api-reference.md)
+- [Architecture](architecture.md)
+- [Data Model](data-model.md)
