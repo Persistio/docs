@@ -36,7 +36,7 @@ Important fields:
 | `name` | Human-readable name |
 | `api_key_hash` | Hash of the vault API key |
 | `settings` | JSON settings, including embedding dimensions |
-| `plan_id` | `free`, `starter`, or `pro` |
+| `plan_id` | Plan id referencing `plans.id`; fresh public/self-host deployments default to `unlimited` |
 | `purpose` | Optional context injected into extraction |
 | `encrypted_dek` | Wrapped data encryption key when encryption is enabled |
 | `vault_encryption_enabled` | Per-vault encryption flag |
@@ -124,7 +124,7 @@ Recall can include outgoing graph neighbors from semantic matches.
 
 `extraction_queue` dispatches extraction work. Current ingest enqueues by `segment_id`; legacy single-chunk rows may still exist through `chunk_id`.
 
-`curation_queue` dispatches Pro-plan curation work when curation is enabled.
+`curation_queue` dispatches plan-enabled curation work when curation is enabled.
 
 Both queues use claim timestamps and worker IDs so multiple workers can claim rows safely.
 
@@ -138,4 +138,4 @@ Both queues use claim timestamps and worker IDs so multiple workers can claim ro
 - `memory_adds`
 - `searches`
 
-Plan limits come from `plans.limits` and are surfaced through `GET /stats`.
+Plan limits come from `plans.limits` and are surfaced through `GET /stats`. Vaults reference plans by id; plan limits are managed through admin plan routes, not through vault create/update requests.

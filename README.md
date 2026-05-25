@@ -4,7 +4,7 @@ Persistio is a self-hostable memory layer for AI agents and LLM applications. It
 
 Current source alignment:
 
-- Server package: `@persistio/server` `0.1.9`
+- Server package: `@persistio/server` `0.1.15`
 - OpenClaw plugin package: `@persistio/openclaw-plugin` `0.1.4`
 - OpenClaw compatibility: `>=2026.3.24-beta.2`
 
@@ -51,7 +51,7 @@ docker compose up -d
 curl -X POST http://localhost:4827/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"name":"my-agent","purpose":"Personal assistant memory","plan":"free"}'
+  -d '{"name":"my-agent","purpose":"Personal assistant memory"}'
 
 # 3. Ingest a conversation
 curl -X POST http://localhost:4827/v1/ingest \

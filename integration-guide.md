@@ -19,7 +19,7 @@ Raw conversation chunks
 
 `POST /v1/ingest` is the write path. It stores chunks, embeds them, groups them into segments, and queues extraction. Recall is the read path. It retrieves active memories from `memory_embeddings`, optionally expands through directed `memory_edges`, and can return raw evidence.
 
-For Pro vaults with curation enabled, extraction can write candidate memories first. The curation worker promotes, updates, archives, or links them into a graph.
+For vaults whose plan enables curation, extraction can write candidate memories first. The curation worker promotes, updates, archives, or links them into a graph.
 
 ---
 
@@ -173,10 +173,12 @@ Use one vault per tenant, user, agent, or isolated memory boundary.
 curl -X POST https://your-persistio-instance/admin/vaults \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"name":"user-alice","purpose":"Alice assistant memory","plan":"starter"}'
+  -d '{"name":"user-alice","purpose":"Alice assistant memory"}'
 ```
 
 Store each vault API key in your own secrets store and use it only for that tenant's vault-scoped requests.
+
+Self-host deployments seed `unlimited` by default. Manage any additional plan ids and limits through `/admin/plans`; vault create and update requests only assign a vault to an existing plan.
 
 Rotate compromised keys immediately:
 

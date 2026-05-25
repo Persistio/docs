@@ -29,7 +29,7 @@ Returns service health, server version, database latency, and queue depths.
 ```json
 {
   "status": "ok",
-  "version": "0.1.9",
+  "version": "0.1.15",
   "db": "ok",
   "db_latency_ms": 12,
   "extraction_queue_depth": 0,
@@ -347,7 +347,7 @@ Fetch vault plan, usage, limits, memory counts, entity alias count, and contradi
 ```json
 {
   "vault_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "plan": "free",
+  "plan": "unlimited",
   "period": "2026-05",
   "memories": {
     "active": 12,
@@ -356,7 +356,7 @@ Fetch vault plan, usage, limits, memory counts, entity alias count, and contradi
     "contradicted": 0,
     "superseded": 1,
     "archived": 2,
-    "limit": 1000
+    "limit": 1000000
   },
   "entity_aliases": 3,
   "contradiction_scan": {
@@ -364,9 +364,9 @@ Fetch vault plan, usage, limits, memory counts, entity alias count, and contradi
     "arbitrations_this_week": 0
   },
   "usage": {
-    "ingest_events": { "consumed": 20, "limit": 1000 },
-    "memory_adds": { "consumed": 4, "limit": 100 },
-    "searches": { "consumed": 37, "limit": 5000 }
+    "ingest_events": { "consumed": 20, "limit": 1000000 },
+    "memory_adds": { "consumed": 4, "limit": 1000000 },
+    "searches": { "consumed": 37, "limit": 5000000 }
   }
 }
 ```
@@ -387,7 +387,7 @@ Create a vault and receive its API key.
 |-------|------|----------|-------------|
 | `name` | string | yes | Vault name |
 | `purpose` | string | no | Vault-specific context used by extraction |
-| `plan` | string | no | `free`, `starter`, or `pro`; default `free` |
+| `plan` | string | no | Existing plan id; default `unlimited` |
 
 **Response:** `201 Created`
 
@@ -396,10 +396,82 @@ Create a vault and receive its API key.
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "my-agent",
   "purpose": "Personal assistant memory",
-  "plan": "free",
+  "plan": "unlimited",
+  "status": "active",
   "api_key": "pt_your_api_key_here"
 }
 ```
+
+Fresh public/self-host deployments seed a single `unlimited` plan. If `plan` is supplied, it must already exist.
+
+### `GET /admin/plans`
+
+List platform plans.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
+**Response:** `200 OK`
+
+```json
+{
+  "items": [
+    {
+      "id": "unlimited",
+      "limits": {
+        "memories_max": 1000000,
+        "ingest_events_per_month": 1000000,
+        "memory_adds_per_month": 1000000,
+        "searches_per_month": 5000000,
+        "curator_enabled": true
+      }
+    }
+  ]
+}
+```
+
+### `GET /admin/plans/:id`
+
+Return one platform plan.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
+**Response:** `200 OK` or `404 Not Found`
+
+### `POST /admin/plans`
+
+Create or replace a platform plan's limits.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
+```bash
+curl -X POST https://your-persistio-instance/admin/plans \
+  -H "X-Admin-Key: adm_your_admin_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"unlimited","limits":{"memories_max":1000000}}'
+```
+
+### `PATCH /admin/plans/:id`
+
+Replace an existing platform plan's limits.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
+```bash
+curl -X PATCH https://your-persistio-instance/admin/plans/unlimited \
+  -H "X-Admin-Key: adm_your_admin_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"limits":{"memories_max":1000000}}'
+```
+
+**Response:** `200 OK` or `404 Not Found`
+
+### `DELETE /admin/plans/:id`
+
+Delete an unused platform plan.
+
+**Auth:** `X-Admin-Key` or Bearer admin key
+
+**Response:** `200 OK`, `404 Not Found`, or `409 Conflict` when the plan is referenced by a vault.
 
 ### `GET /admin/vaults`
 
@@ -418,7 +490,8 @@ List vaults.
       "purpose": "Personal assistant memory",
       "created_at": "2026-05-19T12:00:00.000Z",
       "settings": { "embedding_dimensions": 1536 },
-      "plan_id": "free",
+      "plan_id": "unlimited",
+      "status": "active",
       "account_id": null,
       "vault_encryption_enabled": false
     }
@@ -428,7 +501,7 @@ List vaults.
 
 ### `PATCH /admin/vaults/:id`
 
-Update a vault's `name`, `purpose`, or `plan`.
+Update a vault's `name`, `purpose`, `plan`, or `status`.
 
 **Auth:** `X-Admin-Key` or Bearer admin key
 
@@ -436,8 +509,10 @@ Update a vault's `name`, `purpose`, or `plan`.
 curl -X PATCH https://your-persistio-instance/admin/vaults/a1b2c3d4-e5f6-7890-abcd-ef1234567890 \
   -H "X-Admin-Key: adm_your_admin_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"purpose":"Memory for support assistant","plan":"starter"}'
+  -d '{"purpose":"Memory for support assistant","plan":"unlimited","status":"active"}'
 ```
+
+Plan updates only assign the vault to an existing plan. Plan limits are managed through `/admin/plans`, not through vault create/update requests.
 
 ### `POST /admin/vaults/:id/rotate-key`
 
