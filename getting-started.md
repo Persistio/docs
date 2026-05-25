@@ -36,7 +36,7 @@ The response includes database status and queue depth fields:
 ```json
 {
   "status": "ok",
-  "version": "0.1.9",
+  "version": "0.1.15",
   "db": "ok",
   "db_latency_ms": 12,
   "extraction_queue_depth": 0,
@@ -60,8 +60,7 @@ curl -X POST http://localhost:4827/admin/vaults \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-agent",
-    "purpose": "Long-term memory for my assistant",
-    "plan": "free"
+    "purpose": "Long-term memory for my assistant"
   }'
 ```
 
@@ -72,12 +71,14 @@ Response:
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "my-agent",
   "purpose": "Long-term memory for my assistant",
-  "plan": "free",
+  "plan": "unlimited",
   "api_key": "pt_your_api_key_here"
 }
 ```
 
 Save the `api_key`. Use it as a Bearer token for vault-scoped routes.
+
+Fresh public/self-host deployments seed a single `unlimited` plan and new vaults use it by default. To assign another plan, create it first with the admin plan routes, then pass its id as `plan`.
 
 ---
 

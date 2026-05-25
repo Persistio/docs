@@ -36,7 +36,7 @@ The worker path is asynchronous and handles:
 - extractor model calls
 - fact filtering, subject resolution, embedding, and deduplication
 - contradiction scans
-- optional Pro-plan curation
+- optional plan-enabled curation
 
 This split keeps embedding, extraction, and curation work off the request path. Ingest returns `202 Accepted` after queueing work.
 
@@ -66,7 +66,7 @@ The main handoff is:
 3. API queues one extraction job per segment
 4. Worker claims queue rows with `FOR UPDATE SKIP LOCKED`
 5. Worker writes or updates `memories`
-6. Worker optionally enqueues curation for Pro-plan vaults
+6. Worker optionally enqueues curation for vaults whose plan enables it
 
 ---
 
@@ -105,7 +105,7 @@ Bundle mode groups by memory `type`, with global user rules separated for agent 
 
 ## Curation
 
-When `CURATOR_AUTO_RUN=true`, Pro-plan vaults can route extracted memories through curation.
+When `CURATOR_AUTO_RUN=true`, vaults whose plan has `curator_enabled` limits can route extracted memories through curation. Fresh public/self-host deployments seed a single `unlimited` plan; additional plans are managed through admin plan routes.
 
 The curation worker:
 
@@ -124,7 +124,7 @@ This produces an explicit memory graph through `memory_edges`.
 Vaults are the tenancy boundary. Each vault has:
 
 - a unique API key hash
-- plan metadata
+- a plan id, `unlimited` by default on fresh public/self-host deployments
 - quota accounting
 - optional per-vault encryption
 - isolated raw chunks, memories, aliases, edges, and queues
