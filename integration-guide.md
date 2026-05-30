@@ -67,7 +67,9 @@ const res = await fetch(`${baseURL}/v1/recall`, {
   body: JSON.stringify({
     query: 'what does this user prefer?',
     top_k: 10,
+    min_similarity: 0.3,
     include_evidence: true,
+    include_pending: true,
     mode: 'agent'
   })
 });
@@ -75,7 +77,7 @@ const res = await fetch(`${baseURL}/v1/recall`, {
 const { memories, evidence_chunks } = await res.json();
 ```
 
-Use `include_evidence` when you need source-linked raw chunks for returned memories. Use `include_raw` when you want semantic raw chunk matches alongside memory matches.
+Use `include_evidence` when you need source-linked raw chunks for returned memories. Use `include_raw` when you want semantic raw chunk matches alongside memory matches. Use `include_pending` for agent-facing recall when recent candidate memories should be visible before curation promotes them. `min_similarity` can be set per request; when omitted, the server uses `MIN_RECALL_SIMILARITY` (`0.30` by default).
 
 ### Bundle recall
 
@@ -91,11 +93,13 @@ const res = await fetch(`${baseURL}/v1/recall?format=bundle`, {
   body: JSON.stringify({
     query: 'current user and project context',
     top_k: 10,
+    min_similarity: 0.3,
+    include_pending: true,
     mode: 'agent'
   })
 });
 
-const { bundle } = await res.json();
+const { bundle, related_bundle } = await res.json();
 ```
 
 Bundle keys map memory types into stable prompt sections:
@@ -112,6 +116,8 @@ Bundle keys map memory types into stable prompt sections:
 - `domain_knowledge`
 
 In `agent` bundle mode, active global `user_rule` memories are returned separately so important behavioral rules do not consume the query `top_k` budget.
+
+Graph-neighbor context is returned separately as `related_bundle` / `related_memories`, outside the direct semantic `top_k` budget. Preserve that separation when building prompts so related context remains supplemental.
 
 ---
 
@@ -191,7 +197,7 @@ curl -X POST https://your-persistio-instance/admin/vaults/<vault-id>/rotate-key 
 
 ## 7. OpenClaw Plugin
 
-The current package is `@persistio/openclaw-plugin` `0.1.4`.
+The current package is `@persistio/openclaw-plugin` `0.1.5`.
 
 It hooks into:
 
@@ -216,6 +222,7 @@ Configuration:
   "apiKey": "pt_your_api_key_here",
   "tokenBudget": 2000,
   "recallTopK": 10,
+  "recallMinSimilarity": 0.3,
   "recallTimeout": 5000,
   "send": {
     "roles": {

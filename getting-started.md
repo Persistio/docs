@@ -36,12 +36,11 @@ The response includes database status and queue depth fields:
 ```json
 {
   "status": "ok",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "db": "ok",
   "db_latency_ms": 12,
   "extraction_queue_depth": 0,
   "curation_queue_depth": 0,
-  "queue_depth": 0,
   "uptime_s": 34
 }
 ```
@@ -136,6 +135,8 @@ curl -X POST http://localhost:4827/v1/recall \
   -d '{
     "query": "what do I know about this user?",
     "top_k": 5,
+    "min_similarity": 0.3,
+    "include_pending": true,
     "mode": "agent"
   }'
 ```
@@ -161,7 +162,7 @@ Default response:
 }
 ```
 
-Use `include_evidence: true` to return source-linked chunks for returned memories. Use `include_raw: true` to include raw chunk matches.
+Use `include_evidence: true` to return source-linked chunks for returned memories. Use `include_raw: true` to include raw chunk matches. Use `include_pending: true` for agent recall when recently extracted candidate memories should be visible before curation promotes them.
 
 For agent prompt assembly, request a structured bundle:
 
@@ -169,16 +170,16 @@ For agent prompt assembly, request a structured bundle:
 curl -X POST "http://localhost:4827/v1/recall?format=bundle" \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"query":"current user context","top_k":10,"mode":"agent"}'
+  -d '{"query":"current user context","top_k":10,"min_similarity":0.3,"include_pending":true,"mode":"agent"}'
 ```
 
-Bundle sections include `global_user_rules`, `user_rules`, `user_preferences`, `task_patterns`, `workflows`, `project`, `constraints`, `decisions`, `system_facts`, and `domain_knowledge`.
+Bundle sections include `global_user_rules`, `user_rules`, `user_preferences`, `task_patterns`, `workflows`, `project`, `constraints`, `decisions`, `system_facts`, and `domain_knowledge`. Graph-neighbor context is returned separately as `related_bundle` so supplemental memories do not consume the direct `top_k` budget.
 
 ---
 
 ## 5. Install the OpenClaw Plugin
 
-The current plugin package is `@persistio/openclaw-plugin` `0.1.4` and requires OpenClaw `>=2026.3.24-beta.2`.
+The current plugin package is `@persistio/openclaw-plugin` `0.1.5` and requires OpenClaw `>=2026.3.24-beta.2`.
 
 ```bash
 npm install -g @persistio/openclaw-plugin
@@ -197,6 +198,7 @@ Register it in OpenClaw:
           "apiKey": "pt_your_api_key_here",
           "tokenBudget": 2000,
           "recallTopK": 10,
+          "recallMinSimilarity": 0.3,
           "recallTimeout": 5000,
           "send": {
             "roles": {
