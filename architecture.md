@@ -10,7 +10,7 @@ At a high level Persistio provides:
 - semantic ingest and recall over pgvector-backed embeddings
 - an asynchronous extraction pipeline that turns conversation segments into memories
 - optional curation for curator-enabled vaults that promotes extracted candidate memories into an explicit memory graph
-- quota tracking, rate limiting, encryption-at-rest for vault content, and OpenTelemetry instrumentation
+- quota tracking, rate limiting, encryption-at-rest for vault content, and telemetry instrumentation
 
 ## Runtime Topology
 
@@ -85,10 +85,10 @@ Persistio depends on:
 - PostgreSQL plus `pgvector` for relational storage and vector similarity
 - `pg` and `pgvector/pg` for database access
 - Zod for request and environment validation
-- OpenTelemetry exporters for tracing and metrics
+- telemetry hooks for tracing and metrics
 - OpenAI-compatible chat completions for extraction and curation
-- OpenAI, Ollama, TEI, or Vertex embeddings for vector generation
-- Azure Key Vault or Google Cloud KMS for DEK wrapping/unwrapping when encryption is enabled
+- configurable embedding providers for vector generation
+- configurable key wrapping when encryption is enabled
 
 ## Storage Model
 
@@ -137,14 +137,14 @@ Persistio emits:
 - embedding duration histogram
 - gauges for memory totals and extraction queue depth
 
-Tracing helpers in `telemetry.ts` wrap ingest, recall, embedding, extraction, and deduplication spans. OpenTelemetry export is provider-selectable with `TELEMETRY_PROVIDER`: Azure deployments use Application Insights through `azure_monitor`, while GCP deployments use OTLP HTTP to a local collector sidecar through `gcp_otlp`.
+Tracing helpers in `telemetry.ts` wrap ingest, recall, embedding, extraction, and deduplication spans. Telemetry export is optional and provider-selectable at runtime.
 
 ## Security and Isolation
 
 Vaults are the tenancy boundary. Each vault has:
 
 - a unique API key hash
-- a plan id (`unlimited` by default on public/self-host deployments)
+- a plan id (`unlimited` by default on self-host installs)
 - optional per-vault wrapped DEK
 - separate current-period quota accounting in `vault_usage`
 
@@ -156,14 +156,6 @@ When encryption is enabled:
 - the DEK is wrapped by the configured key provider
 - subjects are stored encrypted plus HMACed for exact-match lookup
 
-## Deployment Topology
+## Self-Host Topology
 
-The repository’s production docs and code imply this topology:
-
-- Cloudflare or a cloud load balancer sits in front of the service edge
-- Azure Container Apps or GCP Cloud Run run the Persistio server image
-- PostgreSQL with `pgvector` backs all state
-- Azure Key Vault or Google Cloud KMS is used when encryption is enabled
-- Azure Monitor or a GCP OTLP collector path receives traces and metrics when configured
-
-The checked-in [`docker-compose.yml`](https://github.com/Persistio/server/blob/main/docker-compose.yml) is the simplest local shape: one `persistio` container plus one `pgvector/pgvector:pg17` PostgreSQL container. For split-role deployments, run separate API and worker containers against the same Postgres instance and the same environment configuration.
+The checked-in [`docker-compose.yml`](https://github.com/Persistio/server/blob/main/docker-compose.yml) is the simplest self-host shape: one `persistio` container plus one `pgvector/pgvector:pg17` PostgreSQL container. For split-role self-host runs, run separate API and worker containers against the same Postgres instance and the same environment configuration.

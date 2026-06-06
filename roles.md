@@ -73,7 +73,7 @@ Use this mode when:
 
 Tradeoff:
 
-- the API and background work share one process and one Node runtime, so CPU/network contention is higher than in split deployments
+- the API and background work share one process and one Node runtime, so CPU/network contention is higher than in split-role self-host runs
 
 ## Route Ownership
 

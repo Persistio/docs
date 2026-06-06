@@ -57,7 +57,7 @@ Plan catalog used by vaults and quota enforcement.
 
 | Column | Type | Constraints | Purpose |
 | --- | --- | --- | --- |
-| `id` | `text` | PK | Plan id; public/self-host deployments seed `unlimited` |
+| `id` | `text` | PK | Plan id; self-host installs seed `unlimited` |
 | `limits` | `jsonb` | not null, default `{}` | Plan quotas and caps |
 
 ### `vaults`
@@ -284,7 +284,7 @@ Important constraints and indexes:
 
 Migration note:
 
-- `0006_memory_source_date.sql` added `memories.source_timestamp` for existing deployments.
+- `0006_memory_source_date.sql` added `memories.source_timestamp` for existing databases.
 - `021_memory_source_timestamp.sql` is an idempotent guard for fresh databases whose baseline schema may already have passed the conditional `0006` block before `memories` existed.
 
 ### `memory_embeddings`
