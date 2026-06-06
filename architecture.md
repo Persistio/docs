@@ -1,144 +1,169 @@
 # Persistio Architecture
 
-Persistio is a self-hosted memory service for AI agents. It stores raw conversation chunks, extracts durable memories, optionally curates those memories into a behavioral graph, and exposes retrieval and management APIs for client applications such as the OpenClaw plugin.
+## What Persistio Is
 
----
+Persistio is a self-hosted memory service for AI agents. It stores raw conversational chunks, extracts durable memories from those chunks, optionally curates those memories into a behavioral graph, and exposes retrieval and management APIs for client applications such as the OpenClaw plugin in `packages/plugin`.
 
-## Runtime Modes
+At a high level Persistio provides:
 
-`PERSISTIO_MODE` controls process behavior:
+- multi-tenant vaults with per-vault API keys
+- semantic ingest and recall over pgvector-backed embeddings
+- an asynchronous extraction pipeline that turns conversation segments into memories
+- optional curation for curator-enabled vaults that promotes extracted candidate memories into an explicit memory graph
+- quota tracking, rate limiting, encryption-at-rest for vault content, and OpenTelemetry instrumentation
 
-| Mode | Behavior |
-|------|----------|
-| `api` | Runs Fastify HTTP routes only |
-| `worker` | Runs extraction and curation workers; product API routes are not registered |
-| `combined` | Runs API and worker in one process |
+## Runtime Topology
 
-All modes expose `/health`. Non-worker modes register the product API and run migrations on startup.
+Persistio has three runtime modes controlled by `PERSISTIO_MODE`:
 
----
+- `api`: runs Fastify HTTP routes only
+- `worker`: runs the extraction worker loop and optional curation worker, but does not register the product API
+- `combined`: runs both in one process
+
+Mode detection happens in [`src/index.ts`](https://github.com/Persistio/server/blob/main/src/index.ts):
+
+- `shouldStartWorker = PERSISTIO_MODE !== 'api'`
+- `shouldRegisterFullApi = PERSISTIO_MODE !== 'worker'`
+- `shouldStartCurationWorker = shouldStartWorker && CURATOR_AUTO_RUN`
+
+All modes expose `/health`. Only non-`worker` modes run database migrations on startup and register the application routes.
 
 ## API and Worker Split
 
-The API path is synchronous and handles:
+The main architectural split is between the synchronous API path and the asynchronous extraction/curation path.
 
-- vault and admin authentication
-- `POST /v1/ingest`
-- `raw_chunks`, `segments`, and `extraction_queue` writes
-- recall, memory CRUD, stats, and admin vault routes
-- manual extraction triggers through `POST /v1/extract`
+### API container responsibilities
 
-The worker path is asynchronous and handles:
+- authenticate vault and admin requests
+- accept raw chunk ingest through `POST /v1/ingest`
+- write `raw_chunks`, `segments`, and `extraction_queue`
+- serve recall, memory CRUD, stats, and admin vault routes
+- optionally trigger an immediate worker pass through `POST /v1/extract`
+- keep current-period vault usage counters for quota enforcement and live stats
+- durably emit closed-period usage events for the App to store as billing history
 
-- polling `extraction_queue`
-- decrypting and assembling conversation segments
-- session context and alias extraction
-- extractor model calls
-- fact filtering, subject resolution, embedding, and deduplication
-- contradiction scans
-- optional plan-enabled curation
+### Worker container responsibilities
 
-This split keeps embedding, extraction, and curation work off the request path. Ingest returns `202 Accepted` after queueing work.
+- poll `extraction_queue`
+- decrypt and assemble conversation segments
+- call the extractor LLM and embedding provider
+- resolve canonical subjects
+- deduplicate or insert memories
+- scan for contradictions
+- enqueue curation for curator-enabled candidate memories when enabled
+- poll `curation_queue` and apply curator actions
 
----
+The split keeps CPU-bound and network-heavy extraction work off the request path. The API returns `202 Accepted` quickly, while the worker handles embedding, extraction, and curation in the background.
 
-## Shared State
+## Shared State Between Containers
 
-API and worker containers coordinate through PostgreSQL.
+API and worker containers coordinate exclusively through PostgreSQL.
 
-Core tables include:
+Shared tables include:
 
-- `vaults`
-- `raw_chunks`
-- `segments`
-- `extraction_queue`
-- `memories`
-- `memory_embeddings`
-- `entity_aliases`
-- `memory_edges`
-- `curation_queue`
-- `contradiction_scan_log`
+- `vaults` for tenant metadata, plan, keys, and encryption settings
+- `raw_chunks` for ingested conversation records
+- `segments` for grouped chunk batches
+- `extraction_queue` for extraction work dispatch
+- `memories` and `memory_embeddings` for durable memory storage
+- `curation_queue` and `curation_action_log` for the curation pipeline
 
-The main handoff is:
+The critical handoff is:
 
 1. API writes `raw_chunks`
-2. API groups chunks into `segments`
-3. API queues one extraction job per segment
-4. Worker claims queue rows with `FOR UPDATE SKIP LOCKED`
-5. Worker writes or updates `memories`
-6. Worker optionally enqueues curation for vaults whose plan enables it
+2. API groups those chunks into `segments`
+3. API inserts one queue row per segment into `extraction_queue`
+4. worker claims queue rows with `FOR UPDATE SKIP LOCKED`
+5. worker writes or updates `memories`
+6. worker optionally enqueues `curation_queue` entries for curator-enabled vaults
 
----
+## Core Dependencies
 
-## Extraction Pipeline
+Persistio depends on:
 
-For each segment, the extraction worker:
+- Fastify for the HTTP server
+- PostgreSQL plus `pgvector` for relational storage and vector similarity
+- `pg` and `pgvector/pg` for database access
+- Zod for request and environment validation
+- OpenTelemetry exporters for tracing and metrics
+- OpenAI-compatible chat completions for extraction and curation
+- OpenAI, Ollama, TEI, or Vertex embeddings for vector generation
+- Azure Key Vault or Google Cloud KMS for DEK wrapping/unwrapping when encryption is enabled
 
-1. reconstructs the conversation with timestamps and roles
-2. creates or reuses a `session_contexts` summary
-3. extracts aliases and stores canonical subject mappings
-4. asks the extractor model for durable facts
-5. filters low-score, secret-like, and restricted facts
-6. resolves subjects with normalization, embedding similarity, and optional arbitration
-7. deduplicates against existing memories
-8. writes memory rows and embeddings
-9. scans for contradictions when enabled
+## Storage Model
 
-Extraction settings allow separate provider configuration for routine extraction and escalation arbitration.
+Persistio stores two different kinds of data:
 
----
+- raw conversational evidence in `raw_chunks`, `segments`, and `session_contexts`
+- distilled durable knowledge in `memories`, `memory_embeddings`, `entity_aliases`, `memory_edges`, and queue/log tables
 
-## Recall
+Embeddings are normalized to the 1536-dimension storage schema. OpenAI natively matches that shape; Ollama embeddings are zero-padded to fit.
 
-Recall embeds the query and returns active, non-archived memories from `memory_embeddings`.
+## Extraction and Curation Architecture
 
-It can also:
+Extraction is implemented by [`src/daemon/extraction-worker.ts`](https://github.com/Persistio/server/blob/main/src/daemon/extraction-worker.ts).
 
-- expand through directed outgoing `memory_edges`
-- return source-linked evidence chunks with `include_evidence`
-- return raw chunk semantic matches with `include_raw`
-- return a grouped prompt bundle with `?format=bundle`
+Key behaviors:
 
-Bundle mode groups by memory `type`, with global user rules separated for agent prompt construction.
+- stale queue claims older than 10 minutes are released
+- work is claimed in batches with `FOR UPDATE SKIP LOCKED`
+- per-batch concurrency is limited by `EXTRACTION_WORKER_CONCURRENCY`
+- session context and entity aliases are derived once per session
+- facts are filtered by score, secret patterns, and sensitivity before insertion
+- curator-enabled vaults write `candidate` memories first, then the curation worker promotes or mutates them
 
----
+Curation is implemented by [`src/daemon/curation-worker.ts`](https://github.com/Persistio/server/blob/main/src/daemon/curation-worker.ts).
 
-## Curation
+Key behaviors:
 
-When `CURATOR_AUTO_RUN=true`, vaults whose plan has `curator_enabled` limits can route extracted memories through curation. Fresh public/self-host deployments seed a single `unlimited` plan; additional plans are managed through admin plan routes.
+- only runs when `CURATOR_AUTO_RUN=true`
+- claims `curation_queue` rows in batches
+- loads candidate memories for a segment plus active memories for matching subjects
+- asks the curator model for node/edge actions
+- records every applied or failed action in `curation_action_log`
+- promotes untouched candidates from `candidate` to `active`
 
-The curation worker:
+The current curation worker is event-adjacent: extraction enqueues eligible curation work and the worker drains the queue behind plan cadence, budget, and queue eligibility gates.
 
-- claims `curation_queue` rows
-- loads candidate memories, active same-subject memories, and raw segment context
-- asks the curator model for node and edge actions
-- creates, updates, promotes, archives, or links memories
-- logs applied and failed actions
+## Observability
 
-This produces an explicit memory graph through `memory_edges`.
+Persistio emits:
 
----
+- request latency histogram
+- recall latency histogram
+- ingest chunk counter
+- extraction job counter
+- extraction lag histogram
+- embedding duration histogram
+- gauges for memory totals and extraction queue depth
+
+Tracing helpers in `telemetry.ts` wrap ingest, recall, embedding, extraction, and deduplication spans. OpenTelemetry export is provider-selectable with `TELEMETRY_PROVIDER`: Azure deployments use Application Insights through `azure_monitor`, while GCP deployments use OTLP HTTP to a local collector sidecar through `gcp_otlp`.
 
 ## Security and Isolation
 
 Vaults are the tenancy boundary. Each vault has:
 
 - a unique API key hash
-- a plan id, `unlimited` by default on fresh public/self-host deployments
-- quota accounting
-- optional per-vault encryption
-- isolated raw chunks, memories, aliases, edges, and queues
+- a plan id (`unlimited` by default on public/self-host deployments)
+- optional per-vault wrapped DEK
+- separate current-period quota accounting in `vault_usage`
 
-When encryption is active, memory facts and session context are encrypted with a per-vault DEK. Subjects can be stored encrypted with an HMAC for exact-match lookup.
+Closed-period usage history is not stored long-term in platform Postgres. The platform can export durable period-close events for downstream billing/reporting systems.
 
----
+When encryption is enabled:
 
-## Observability
+- facts and session context are AES-256-GCM encrypted with a per-vault DEK
+- the DEK is wrapped by the configured key provider
+- subjects are stored encrypted plus HMACed for exact-match lookup
 
-Persistio emits request latency, recall latency, ingest chunk counts, extraction job counts, extraction lag, embedding duration, memory totals, and queue depth metrics. OpenTelemetry spans wrap ingest, recall, embedding, extraction, and deduplication. Azure Monitor export is enabled when `APPLICATIONINSIGHTS_CONNECTION_STRING` is configured.
+## Deployment Topology
 
----
+The repository’s production docs and code imply this topology:
 
-## Deployment Shape
+- Cloudflare or a cloud load balancer sits in front of the service edge
+- Azure Container Apps or GCP Cloud Run run the Persistio server image
+- PostgreSQL with `pgvector` backs all state
+- Azure Key Vault or Google Cloud KMS is used when encryption is enabled
+- Azure Monitor or a GCP OTLP collector path receives traces and metrics when configured
 
-The simplest local shape is Docker Compose with one Persistio container and one `pgvector` PostgreSQL container. Split-role deployments run separate API and worker containers against the same PostgreSQL database and environment configuration.
+The checked-in [`docker-compose.yml`](https://github.com/Persistio/server/blob/main/docker-compose.yml) is the simplest local shape: one `persistio` container plus one `pgvector/pgvector:pg17` PostgreSQL container. For split-role deployments, run separate API and worker containers against the same Postgres instance and the same environment configuration.
