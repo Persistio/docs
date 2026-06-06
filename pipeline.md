@@ -211,7 +211,7 @@ Decision order:
 4. if similarity `> 0.90`, update in place
 5. if similarity `>= 0.80`, apply escalation routing:
    - routine moderate overlap is inserted as a separate memory without model arbitration
-   - Sonnet/escalation arbitration is reserved for behavioral signal, low extraction confidence on the new candidate, strong semantic overlap, possible conflict, possible supersession, or existing memories that are candidates, low-confidence, or already marked `needs_review`
+   - escalation arbitration is reserved for agent-context signal, low extraction confidence on the new candidate, strong semantic overlap, possible conflict, possible supersession, or existing memories that are candidates, low-confidence, or already marked `needs_review`
    - if escalation is required but no extractor is available, the safe fallback is `needs_review`
 6. escalation arbitration requests are collected per extraction job and sent through `arbitrateConflictsBatch()` before memory writes; dedup reuses the precomputed decision only when the same existing memory is still the best match. If multiple candidates preflight to the same existing memory, only the earliest precomputed decision is reused and later candidates re-arbitrate live after prior writes.
 7. when escalation arbitration runs:

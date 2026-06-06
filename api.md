@@ -350,8 +350,8 @@ Behavior:
 - query-relevant `memories` / `bundle` sections are selected from semantic recall within the `top_k` budget
 - by default, semantic recall only searches active memories; when `include_pending=true`, it also searches fresh `candidate` memories whose `source_timestamp` (or `created_at` fallback) is within the pending recall freshness window
 - overfetches semantic candidates from `memory_embeddings`, drops semantic and raw matches below `min_similarity`, applies mode-aware type ranking plus a small recency boost, then applies `top_k`
-- in `agent` mode, close semantic matches with behavioral types such as `user_rule`, `user_preference`, and `task_pattern` rank ahead of factual/structural types
-- in `factual` mode, close semantic matches with factual/structural types such as `system_fact`, `domain_knowledge`, `project`, `decision`, and `constraint` rank ahead of behavioral types
+- in `agent` mode, close semantic matches with agent-context types such as `user_rule`, `user_preference`, and `task_pattern` rank ahead of factual/structural types
+- in `factual` mode, close semantic matches with factual/structural types such as `system_fact`, `domain_knowledge`, `project`, `decision`, and `constraint` rank ahead of agent-context types
 - close semantic matches from recent source conversations rank ahead of older memories; recency uses `source_timestamp` first, then `updated_at`, then `created_at`, and decays over a short rolling window
 - `format=bundle` preserves the final recall ranking within each bundle section
 - returns fewer than `top_k` direct semantic matches when insufficient memories clear the quality floor

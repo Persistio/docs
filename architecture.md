@@ -2,7 +2,7 @@
 
 ## What Persistio Is
 
-Persistio is a self-hosted memory service for AI agents. It stores raw conversational chunks, extracts durable memories from those chunks, optionally curates those memories into a behavioral graph, and exposes retrieval and management APIs for client applications such as the OpenClaw plugin in `packages/plugin`.
+Persistio is a self-hosted memory service for AI agents. It stores raw conversational chunks, extracts durable memories from those chunks, optionally curates those memories into a memory graph, and exposes retrieval and management APIs for client applications such as the OpenClaw plugin.
 
 At a high level Persistio provides:
 
