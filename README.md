@@ -4,8 +4,8 @@ Persistio is a self-hostable memory layer for AI agents and LLM applications. It
 
 Current source alignment:
 
-- Server package: `@persistio/server` `0.1.15`
-- OpenClaw plugin package: `@persistio/openclaw-plugin` `0.1.4`
+- Server package: `@persistio/server` `0.1.16`
+- OpenClaw plugin package: `@persistio/openclaw-plugin` `0.1.5`
 - OpenClaw compatibility: `>=2026.3.24-beta.2`
 
 The public API uses vault Bearer tokens for vault-scoped routes. Admin routes accept `X-Admin-Key` or a Bearer admin key.
@@ -72,7 +72,7 @@ curl -X POST http://localhost:4827/v1/ingest \
 curl -X POST http://localhost:4827/v1/recall \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"query":"who am I?","top_k":5}'
+  -d '{"query":"who am I?","top_k":5,"min_similarity":0.3,"include_pending":true}'
 ```
 
 See [Getting Started](getting-started.md) for the full walkthrough.

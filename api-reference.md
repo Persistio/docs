@@ -29,12 +29,11 @@ Returns service health, server version, database latency, and queue depths.
 ```json
 {
   "status": "ok",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "db": "ok",
   "db_latency_ms": 12,
   "extraction_queue_depth": 0,
   "curation_queue_depth": 0,
-  "queue_depth": 0,
   "uptime_s": 34
 }
 ```
@@ -119,8 +118,10 @@ Retrieve semantic memory matches, optional evidence chunks, optional raw chunks,
 |-------|------|----------|-------------|
 | `query` | string | yes | Natural language query |
 | `top_k` | integer | no | Positive integer up to 100; defaults to server `DEFAULT_RECALL_TOP_K` |
+| `min_similarity` | number | no | Semantic recall quality floor from `0` to `1`; defaults to server `MIN_RECALL_SIMILARITY` (`0.30`) |
 | `include_raw` | boolean | no | Return semantically matching raw chunks in `raw_chunks`; default `false` |
 | `include_evidence` | boolean | no | Return source-linked chunks for returned memories; default `false` |
+| `include_pending` | boolean | no | Include fresh `candidate` memories awaiting curation; default `false` |
 | `mode` | string | no | `agent` or `factual`; default `agent` |
 
 **Default response:** `200 OK`
@@ -171,6 +172,8 @@ When `include_evidence` is true, `evidence_chunks` contains source chunks linked
 
 When `include_raw` is true, `raw_chunks` contains semantically matching raw chunks with `similarity`.
 
+Recall overfetches semantic candidates, filters out matches below `min_similarity`, applies mode-aware type ranking and a small recency boost, and may return fewer than `top_k` memories when insufficient candidates clear the quality floor. With `include_pending=true`, recall also searches fresh pending candidate memories using `source_timestamp` first and `created_at` as a fallback for freshness.
+
 **Bundle response**
 
 Request `POST /v1/recall?format=bundle` to receive grouped prompt context:
@@ -188,11 +191,23 @@ Request `POST /v1/recall?format=bundle` to receive grouped prompt context:
     "decisions": [],
     "system_facts": [],
     "domain_knowledge": []
+  },
+  "related_bundle": {
+    "global_user_rules": [],
+    "user_rules": [],
+    "user_preferences": [],
+    "task_patterns": [],
+    "workflows": [],
+    "project": [],
+    "constraints": [],
+    "decisions": [],
+    "system_facts": [],
+    "domain_knowledge": ["Related project background."]
   }
 }
 ```
 
-In `agent` bundle mode, up to 5 active global `user_rule` memories are included in `global_user_rules` without consuming the query `top_k` budget. Query-relevant sections come from semantic and graph recall.
+In `agent` bundle mode, up to 5 active global `user_rule` memories are included in `global_user_rules` without consuming the query `top_k` budget. Query-relevant sections come from semantic recall. Graph-neighbor context is returned separately as `related_memories` or `related_bundle` so it does not compete with direct semantic matches.
 
 **curl**
 
@@ -200,7 +215,7 @@ In `agent` bundle mode, up to 5 active global `user_rule` memories are included 
 curl -X POST "https://your-persistio-instance/v1/recall?format=bundle" \
   -H "Authorization: Bearer pt_your_api_key_here" \
   -H "Content-Type: application/json" \
-  -d '{"query":"current user context","top_k":10,"mode":"agent"}'
+  -d '{"query":"current user context","top_k":10,"min_similarity":0.3,"include_pending":true,"mode":"agent"}'
 ```
 
 ---
@@ -269,9 +284,15 @@ curl -X POST https://your-persistio-instance/v1/memories \
 
 ### `GET /v1/memories/:id`
 
-Fetch one memory by UUID.
+Fetch one non-candidate memory by UUID, or a fresh pending candidate when explicitly requested.
 
 **Auth:** Bearer token
+
+**Query parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `include_pending` | boolean | When `true`, a fresh `candidate` memory within the pending recall freshness window may be returned by id |
 
 **Response:** `200 OK` or `404 Not Found`
 
