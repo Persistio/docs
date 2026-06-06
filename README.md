@@ -1,78 +1,17 @@
-# Persistio Developer Documentation
+# Persistio Documentation
 
-Persistio is a self-hostable memory layer for AI agents and LLM applications. It stores raw conversation chunks, extracts durable memories asynchronously, supports semantic and graph-assisted recall, and exposes vault-scoped APIs for memory management.
+Public-facing documentation for self-hosting Persistio and integrating with its API and OpenClaw plugin.
 
-Current source alignment:
+- [Getting Started](getting-started.md) - run the self-host server, create a vault, ingest, and recall
+- [API Reference](api.md) - authentication and endpoint contracts
+- [Integration Guide](integration-guide.md) - common API and plugin integration patterns
+- [Architecture](architecture.md) - runtime modes, storage, encryption, workers, and recall
+- [Roles and Workers](roles.md) - local combined mode and split API/worker mode
+- [Pipeline](pipeline.md) - ingest, extraction, recall, and curation flow
+- [Data Model](data-model.md) - schema concepts and retention notes
+- [Re-embedding Migration](reembedding-migration.md) - self-host operator notes for changing embedding dimensions/models
 
-- Server package: `@persistio/server` `0.1.16`
-- OpenClaw plugin package: `@persistio/openclaw-plugin` `0.1.5`
-- OpenClaw compatibility: `>=2026.3.24-beta.2`
+Source repositories:
 
-The public API uses vault Bearer tokens for vault-scoped routes. Admin routes accept `X-Admin-Key` or a Bearer admin key.
-
----
-
-## Documentation
-
-| Guide | Description |
-|-------|-------------|
-| [Getting Started](getting-started.md) | Run the server, create a vault, ingest chunks, recall memory, and install the OpenClaw plugin |
-| [API Reference](api-reference.md) | Endpoint reference with request fields, response shapes, and examples |
-| [Integration Guide](integration-guide.md) | Integration patterns for ingest, recall, memory management, quotas, and plugin usage |
-| [Architecture](architecture.md) | Runtime topology, API/worker split, extraction, curation, observability, and security |
-| [Data Model](data-model.md) | Vault tenancy, core tables, memory metadata, graph edges, and queues |
-
----
-
-## Repositories
-
-| Repo | Description |
-|------|-------------|
-| [chriscoveyduck/persistio](https://github.com/chriscoveyduck/persistio) | Persistio server and package source |
-| [Persistio/openclaw-persistio](https://github.com/Persistio/openclaw-persistio) | OpenClaw plugin for drop-in Persistio memory integration |
-
----
-
-## Hosted Service
-
-A managed instance is available at **[persistio.ai](https://persistio.ai)**.
-
----
-
-## Quick Start
-
-```bash
-# 1. Run the server
-git clone https://github.com/chriscoveyduck/persistio
-cd persistio
-docker compose up -d
-
-# 2. Create a vault
-curl -X POST http://localhost:4827/admin/vaults \
-  -H "X-Admin-Key: adm_your_admin_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-agent","purpose":"Personal assistant memory"}'
-
-# 3. Ingest a conversation
-curl -X POST http://localhost:4827/v1/ingest \
-  -H "Authorization: Bearer pt_your_api_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "session-001",
-    "chunks": [
-      {
-        "role": "user",
-        "content": "My name is Alice.",
-        "timestamp": "2026-05-19T12:00:00.000Z"
-      }
-    ]
-  }'
-
-# 4. Recall relevant memories
-curl -X POST http://localhost:4827/v1/recall \
-  -H "Authorization: Bearer pt_your_api_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"who am I?","top_k":5,"min_similarity":0.3,"include_pending":true}'
-```
-
-See [Getting Started](getting-started.md) for the full walkthrough.
+- [Persistio/server](https://github.com/Persistio/server) - public self-host server
+- [Persistio/openclaw-persistio](https://github.com/Persistio/openclaw-persistio) - OpenClaw memory-slot plugin
